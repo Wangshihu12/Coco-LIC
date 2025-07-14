@@ -57,52 +57,61 @@ namespace cocolic
 
     std::vector<int> cp_num_vec;
 
+    // 根据IMU数据的运动强度决定B样条节点密度
     int GetKnotDensity(double gyro_norm, double acce_norm)
     {
+      // 输入参数有效性检查
       if (gyro_norm < 0.0 || acce_norm < 0.0)
       {
         std::cout << RED << "gyro_norm/acce_norm is wrong!" << RESET << std::endl;
       }
 
-      int gyro_density = -1, acce_density = -1;
+      int gyro_density = -1, acce_density = -1;  // 陀螺仪和加速度计对应的密度档位
 
+      // 去除重力影响：计算真正的加速度变化量
+      // 减去重力模长，得到运动引起的加速度变化
       acce_norm = std::abs(acce_norm - gravity_norm_);
       // LOG(INFO) << "[acce_norm] " << acce_norm;
+      
+      // 根据加速度变化量分档：运动越剧烈，需要更密集的控制点
       if (acce_norm < 0.5)
-      { // [0, 0.5)
-        acce_density = KnotDensity::gear1;
+      { // [0, 0.5) - 几乎静止或匀速运动
+        acce_density = KnotDensity::gear1;  // 最低密度档位
       }
       else if (acce_norm < 1.0)
-      { // [0.5, 1.0)
-        acce_density = KnotDensity::gear2;
+      { // [0.5, 1.0) - 轻微加速度变化
+        acce_density = KnotDensity::gear2;  // 第二档密度
       }
       else if (acce_norm < 5.0)
-      { // [1.0, 5.0)
-        acce_density = KnotDensity::gear3;
+      { // [1.0, 5.0) - 中等加速度变化
+        acce_density = KnotDensity::gear3;  // 第三档密度
       }
       else
-      { // [5.0, -)
-        acce_density = KnotDensity::gear4;
+      { // [5.0, -) - 强烈加速度变化
+        acce_density = KnotDensity::gear4;  // 最高密度档位
       }
 
       // LOG(INFO) << "[gyro_norm] " << gyro_norm;
+      // 根据角速度大小分档：旋转越快，需要更密集的控制点
       if (gyro_norm < 0.5)
-      { // [0, 0.5)
-        gyro_density = KnotDensity::gear1;
+      { // [0, 0.5) - 几乎不旋转或缓慢旋转
+        gyro_density = KnotDensity::gear1;  // 最低密度档位
       }
       else if (gyro_norm < 1.0)
-      { // [0.5, 1.0)
-        gyro_density = KnotDensity::gear2;
+      { // [0.5, 1.0) - 轻微旋转
+        gyro_density = KnotDensity::gear2;  // 第二档密度
       }
       else if (gyro_norm < 5.0)
-      { // [1.0, 5.0)
-        gyro_density = KnotDensity::gear3;
+      { // [1.0, 5.0) - 中等旋转速度
+        gyro_density = KnotDensity::gear3;  // 第三档密度
       }
       else
-      { // [5.0, -)
-        gyro_density = KnotDensity::gear4;
+      { // [5.0, -) - 快速旋转
+        gyro_density = KnotDensity::gear4;  // 最高密度档位
       }
 
+      // 返回两个密度档位的最大值：取更高的密度要求
+      // 这样可以确保轨迹能够准确描述最剧烈的运动分量
       return std::max(gyro_density, acce_density);
     };
 

@@ -617,49 +617,80 @@ class Se3Spline {
   }
 
   /// [for vector]
+  // 初始化B样条的混合矩阵（用于非均匀B样条的基函数计算）
   void InitBlendMat() {
-    Eigen::Matrix4d blending_mat = Eigen::Matrix4d::Zero();
+    Eigen::Matrix4d blending_mat = Eigen::Matrix4d::Zero();  // 4x4混合矩阵，初始化为零
     
-    double ti = knts[3] * NS_TO_S;
-    double ti_minus_2 = knts[1] * NS_TO_S;
-    double ti_minus_1 = knts[2] * NS_TO_S;
-    double ti_plus_1 = knts[4] * NS_TO_S;
-    double ti_plus_2 = knts[5] * NS_TO_S;
-    double ti_plus_3 = knts[6] * NS_TO_S;
+    // 提取B样条节点的时间戳（转换为秒）
+    // 对于三次B样条，需要6个节点来定义一个区间
+    double ti = knts[3] * NS_TO_S;           // 当前区间的起始时间
+    double ti_minus_2 = knts[1] * NS_TO_S;   // ti-2 时刻
+    double ti_minus_1 = knts[2] * NS_TO_S;   // ti-1 时刻  
+    double ti_plus_1 = knts[4] * NS_TO_S;    // ti+1 时刻
+    double ti_plus_2 = knts[5] * NS_TO_S;    // ti+2 时刻
+    double ti_plus_3 = knts[6] * NS_TO_S;    // ti+3 时刻
+    
+    // 计算非均匀B样条的混合矩阵元素
+    // 这些公式基于非均匀B样条的递推公式推导而来
+    
+    // 第0行：位置相关的混合系数
     blending_mat(0, 0) = (ti_plus_1 - ti) * (ti_plus_1 - ti) / ((ti_plus_1- ti_minus_1) * (ti_plus_1 - ti_minus_2));
     blending_mat(0, 2) = (ti - ti_minus_1) * (ti - ti_minus_1) / ((ti_plus_2 - ti_minus_1) * (ti_plus_1 - ti_minus_1));
+    
+    // 第1行：一阶导数（速度）相关的混合系数
     blending_mat(1, 2) = 3 * (ti_plus_1 - ti) * (ti - ti_minus_1) / ((ti_plus_2 - ti_minus_1) * (ti_plus_1 - ti_minus_1));
+    
+    // 第2行：二阶导数（加速度）相关的混合系数
     blending_mat(2, 2) = 3* (ti_plus_1 - ti) * (ti_plus_1 - ti) / ((ti_plus_2 - ti_minus_1) * (ti_plus_1 - ti_minus_1));
+    
+    // 第3行：三阶导数相关的混合系数
     blending_mat(3, 3) = (ti_plus_1 - ti) * (ti_plus_1 - ti) / ((ti_plus_3 - ti) * (ti_plus_2 - ti));
+    
+    // 根据B样条基函数的约束条件计算其余元素
+    // 位置基函数的和为1的约束
     blending_mat(0, 1) = 1- blending_mat(0, 0) - blending_mat(0, 2);
     blending_mat(0, 3) = 0;
+    
+    // 一阶导数相关的混合系数
     blending_mat(1, 0) = - 3 * blending_mat(0, 0);
     blending_mat(1, 1) = 3 * blending_mat(0, 0) - blending_mat(1, 2);
     blending_mat(1, 3) = 0;
+    
+    // 二阶导数相关的混合系数
     blending_mat(2, 0) = 3 * blending_mat(0, 0);
     blending_mat(2, 1) = - 3 * blending_mat(0, 0) - blending_mat(2, 2);
     blending_mat(2, 3) = 0;
+    
+    // 三阶导数相关的混合系数
     blending_mat(3, 0) = - blending_mat(0, 0);
     blending_mat(3, 2) = - blending_mat(2, 2) / 3 - blending_mat(3, 3) - (ti_plus_1 - ti) * (ti_plus_1 - ti) / ((ti_plus_2 - ti) * (ti_plus_2 - ti_minus_1));
     blending_mat(3, 1) = blending_mat(0, 0) - blending_mat(3, 2) - blending_mat(3, 3);
+    
+    // 转置混合矩阵（为了与控制点向量相乘的矩阵维度匹配）
     blending_mat = (blending_mat.transpose()).eval();
 
+    // 注释掉的部分：均匀B样条的标准混合矩阵
+    // 这是经典的均匀三次B样条混合矩阵
     // blending_mat = Eigen::Matrix4d::Zero();
     // blending_mat << 1.0 / 6, - 3.0 / 6, 3.0 / 6, - 1.0 / 6,
-    //                                     4.0 / 6, 0.0, -6.0 / 6, 3.0 / 6,
-    //                                     1.0 / 6, 3.0 / 6, 3.0 / 6, - 3.0 / 6,
-    //                                     0.0, 0.0, 0.0, 1.0 / 6;
+    //                 4.0 / 6, 0.0, -6.0 / 6, 3.0 / 6,
+    //                 1.0 / 6, 3.0 / 6, 3.0 / 6, - 3.0 / 6,
+    //                 0.0, 0.0, 0.0, 1.0 / 6;
 
+    // 计算累积混合矩阵：用于计算从样条起始点到当前点的累积值
     Eigen::Matrix4d cumu_blending_mat = blending_mat;
     for (int i = 0; i < 4; i++) 
     {
       for (int j = i + 1; j < 4; j++) 
       {
+        // 每一行累加下面所有行的值
         cumu_blending_mat.row(i) += cumu_blending_mat.row(j);
       }
     }
-    blending_mats.push_back(blending_mat);
-    cumu_blending_mats.push_back(cumu_blending_mat);
+    
+    // 存储混合矩阵和累积混合矩阵
+    blending_mats.push_back(blending_mat);           // 普通混合矩阵
+    cumu_blending_mats.push_back(cumu_blending_mat); // 累积混合矩阵
   }
 
   void AddBlendMat(int offset) {

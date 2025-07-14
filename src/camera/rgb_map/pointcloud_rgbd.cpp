@@ -374,97 +374,138 @@ int Global_map::append_points_to_global_map(pcl::PointCloud<T> &pc_in, double  a
     return (m_voxels_recent_visited.size() -  number_of_voxels_before_add);
 }
 
-int Global_map::my_append_points_to_global_map(PosCloud &pc_in, double  added_time,  std::vector<std::shared_ptr<RGB_pts>> *pts_added_vec, int step)
+// 将点云追加到全局地图：管理RGB点云的全局地图数据结构
+int Global_map::my_append_points_to_global_map(PosCloud &pc_in,                            // 输入点云
+                                               double  added_time,                         // 添加时间戳
+                                               std::vector<std::shared_ptr<RGB_pts>> *pts_added_vec,  // 输出：新添加的点向量
+                                               int step)                                   // 采样步长
 {
-    m_in_appending_pts = 1;
+    m_in_appending_pts = 1;  // 设置正在添加点的状态标志
     Common_tools::Timer tim;
-    tim.tic();
-    int acc = 0;
-    int rej = 0;
+    tim.tic();  // 开始计时
+    int acc = 0;  // 接受（新添加）的点数计数
+    int rej = 0;  // 拒绝（已存在）的点数计数
+    
+    // 如果提供了输出向量，先清空它
     if (pts_added_vec != nullptr)
     {
         pts_added_vec->clear();
     }
+    
+    // 管理最近访问的体素集合
     std::unordered_set< std::shared_ptr< RGB_Voxel > > voxels_recent_visited;
-    if (m_recent_visited_voxel_activated_time == 0)
+    if (m_recent_visited_voxel_activated_time == 0)  // 如果未启用最近访问体素机制
     {
-        voxels_recent_visited.clear();
+        voxels_recent_visited.clear();  // 清空集合
     }
     else
     {
+        // 从全局最近访问体素集合中复制
         // m_mutex_m_box_recent_hitted->lock();
         voxels_recent_visited = m_voxels_recent_visited;
         // m_mutex_m_box_recent_hitted->unlock();
+        
+        // 清理过期的体素：移除超过激活时间的体素
         for( Voxel_set_iterator it = voxels_recent_visited.begin(); it != voxels_recent_visited.end();  )
         {
             if ( added_time - ( *it )->m_last_visited_time > m_recent_visited_voxel_activated_time )
             {
-                it = voxels_recent_visited.erase( it );
+                it = voxels_recent_visited.erase( it );  // 移除过期体素
                 continue;
             }
             it++;
         }
         cout << "Restored voxel number = " << voxels_recent_visited.size() << endl;
     }
-    int number_of_voxels_before_add = voxels_recent_visited.size();
-    int pt_size = pc_in.points.size();
-    // step = 4;
+    
+    int number_of_voxels_before_add = voxels_recent_visited.size();  // 记录添加前的体素数量
+    int pt_size = pc_in.points.size();  // 输入点云大小
+    // step = 4;  // 可选的固定步长设置
+    
+    // 遍历输入点云，按指定步长采样处理
     for (int pt_idx = 0; pt_idx < pt_size; pt_idx += step)
     {
-        int add = 1;
+        int add = 1;  // 添加标志：1表示需要添加，0表示已存在
+        
+        // 计算当前点的网格坐标（用于点的哈希表索引）
         int grid_x = std::round(pc_in.points[pt_idx].x / m_minimum_pts_size);
         int grid_y = std::round(pc_in.points[pt_idx].y / m_minimum_pts_size);
         int grid_z = std::round(pc_in.points[pt_idx].z / m_minimum_pts_size);
+        
+        // 计算当前点的体素坐标（用于体素管理）
         int box_x =  std::round(pc_in.points[pt_idx].x / m_voxel_resolution);
         int box_y =  std::round(pc_in.points[pt_idx].y / m_voxel_resolution);
         int box_z =  std::round(pc_in.points[pt_idx].z / m_voxel_resolution);
+        
+        // 检查该网格位置是否已存在点
         if (m_hashmap_3d_pts.if_exist(grid_x, grid_y, grid_z))
         {
-            add = 0;
+            add = 0;  // 标记为不需要添加
+            // 如果需要输出已存在的点，将其添加到输出向量
             if (pts_added_vec != nullptr)
             {
                 pts_added_vec->push_back(m_hashmap_3d_pts.m_map_3d_hash_map[grid_x][grid_y][grid_z]);
             }
         }
+        
+        // 处理体素管理
         RGB_voxel_ptr box_ptr;
-        if(!m_hashmap_voxels.if_exist(box_x, box_y, box_z))
+        if(!m_hashmap_voxels.if_exist(box_x, box_y, box_z))  // 如果该体素不存在
         {
+            // 创建新的RGB体素
             std::shared_ptr<RGB_Voxel> box_rgb = std::make_shared<RGB_Voxel>();
-            m_hashmap_voxels.insert( box_x, box_y, box_z, box_rgb );
+            m_hashmap_voxels.insert( box_x, box_y, box_z, box_rgb );  // 插入体素哈希表
             box_ptr = box_rgb;
         }
-        else
+        else  // 体素已存在
         {
-            box_ptr = m_hashmap_voxels.m_map_3d_hash_map[box_x][box_y][box_z];
+            box_ptr = m_hashmap_voxels.m_map_3d_hash_map[box_x][box_y][box_z];  // 获取现有体素
         }
+        
+        // 将体素加入最近访问集合并更新访问时间
         voxels_recent_visited.insert( box_ptr );
-        box_ptr->m_last_visited_time = added_time;  //
+        box_ptr->m_last_visited_time = added_time;  // 更新最后访问时间
+        
+        // 如果点已存在，跳过添加过程
         if (add == 0)
         {
-            rej++;
+            rej++;  // 增加拒绝计数
             continue;
         }
-        acc++;
+        
+        // 添加新点到地图
+        acc++;  // 增加接受计数
+        
+        // 创建新的RGB点
         std::shared_ptr<RGB_pts> pt_rgb = std::make_shared<RGB_pts>();
-        pt_rgb->set_pos(vec_3(pc_in.points[pt_idx].x, pc_in.points[pt_idx].y, pc_in.points[pt_idx].z));
-        pt_rgb->m_pt_index = m_rgb_pts_vec.size();
-        m_rgb_pts_vec.push_back(pt_rgb);
-        m_hashmap_3d_pts.insert(grid_x, grid_y, grid_z, pt_rgb);
-        box_ptr->add_pt(pt_rgb);
+        pt_rgb->set_pos(vec_3(pc_in.points[pt_idx].x, pc_in.points[pt_idx].y, pc_in.points[pt_idx].z));  // 设置位置
+        pt_rgb->m_pt_index = m_rgb_pts_vec.size();  // 设置点索引
+        
+        // 将点添加到各个数据结构中
+        m_rgb_pts_vec.push_back(pt_rgb);                                    // 添加到全局点向量
+        m_hashmap_3d_pts.insert(grid_x, grid_y, grid_z, pt_rgb);          // 添加到点哈希表
+        box_ptr->add_pt(pt_rgb);                                           // 添加到对应体素
+        
+        // 如果需要输出新添加的点，将其添加到输出向量
         if (pts_added_vec != nullptr)
         {
             pts_added_vec->push_back(pt_rgb);
         }
     }
-    m_in_appending_pts = 0;
+    
+    m_in_appending_pts = 0;  // 重置添加状态标志
+    
+    // 更新全局最近访问体素集合
     // m_mutex_m_box_recent_hitted->lock();
     if (voxels_recent_visited.size() != 0)
     {
-        m_voxels_recent_visited = voxels_recent_visited ;
+        m_voxels_recent_visited = voxels_recent_visited ;  // 更新全局集合
     }
     // m_mutex_m_box_recent_hitted->unlock();
 
     // LOG(INFO) << "[m_voxels_recent_visited size] " << m_voxels_recent_visited.size();
+    
+    // 返回新增的体素数量
     return (m_voxels_recent_visited.size() -  number_of_voxels_before_add);
 }
 

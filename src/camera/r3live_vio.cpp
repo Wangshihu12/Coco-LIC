@@ -1302,99 +1302,146 @@ void R3LIVE::UpdateVisualGlobalMap(const PosCloud::Ptr& cloud_undistort, double 
     m_map_rgb_pts.my_append_points_to_global_map(*cloud_undistort, lidar_scan_time_max, nullptr, m_append_global_map_point_step);
 }
 
+// 更新视觉子地图：处理新的图像帧，进行特征跟踪和位姿估计
 void R3LIVE::UpdateVisualSubMap(const cv::Mat& img_in, double img_time, const Eigen::Quaterniond& q_wc, const Eigen::Vector3d& t_wc)
 {
-    // [1]
+    // [1] 相机初始化：只在第一次调用时执行
     if (!cam_init)
     {
-        cam_init = true;
+        cam_init = true;  // 标记相机已初始化
+        
+        // 获取相机内参和畸变系数数据指针
         double *intrinsic_data = m_camera_intrinsic.data();
         double *camera_dist_data = m_camera_dist_coeffs.data();
+        
+        // 构建相机内参矩阵（3x3）
         g_cam_K << intrinsic_data[ 0 ], intrinsic_data[ 1 ], intrinsic_data[ 2 ], 
-                                  intrinsic_data[ 3 ], intrinsic_data[ 4 ], intrinsic_data[ 5 ], 
-                                  intrinsic_data[ 6 ], intrinsic_data[ 7 ], intrinsic_data[ 8 ];
+                   intrinsic_data[ 3 ], intrinsic_data[ 4 ], intrinsic_data[ 5 ], 
+                   intrinsic_data[ 6 ], intrinsic_data[ 7 ], intrinsic_data[ 8 ];
+        
+        // 构建畸变系数向量（5x1）
         g_cam_dist = Eigen::Map< Eigen::Matrix< double, 5, 1 > >( camera_dist_data );
-        cv::eigen2cv( g_cam_K, intrinsic );
-        cv::eigen2cv( g_cam_dist, dist_coeffs );
-        cv::initUndistortRectifyMap( intrinsic, dist_coeffs, cv::Mat(), intrinsic, cv::Size(m_vio_image_width, m_vio_image_heigh),
-                                 CV_16SC2, m_ud_map1, m_ud_map2 );  //
+        
+        // 将Eigen矩阵转换为OpenCV格式
+        cv::eigen2cv( g_cam_K, intrinsic );      // 内参矩阵
+        cv::eigen2cv( g_cam_dist, dist_coeffs ); // 畸变系数
+        
+        // 初始化去畸变映射表：用于快速图像去畸变
+        cv::initUndistortRectifyMap( intrinsic, dist_coeffs, cv::Mat(), intrinsic, 
+                                   cv::Size(m_vio_image_width, m_vio_image_heigh),
+                                   CV_16SC2, m_ud_map1, m_ud_map2 );
 
+        // 设置光流跟踪器的相机参数
         op_track.set_intrinsic( g_cam_K, g_cam_dist * 0, cv::Size( m_vio_image_width, m_vio_image_heigh) );
-        op_track.m_maximum_vio_tracked_pts = m_maximum_vio_tracked_pts;         
-        m_map_rgb_pts.m_minimum_depth_for_projection = m_tracker_minimum_depth;
-        m_map_rgb_pts.m_maximum_depth_for_projection = m_tracker_maximum_depth;
+        op_track.m_maximum_vio_tracked_pts = m_maximum_vio_tracked_pts;  // 设置最大跟踪点数
+        
+        // 设置RGB地图点的深度范围
+        m_map_rgb_pts.m_minimum_depth_for_projection = m_tracker_minimum_depth;  // 最小深度
+        m_map_rgb_pts.m_maximum_depth_for_projection = m_tracker_maximum_depth;  // 最大深度
     }
 
-    // [2]
+    // [2] 图像预处理和帧初始化
     if (img_in.empty())
     {
-        std::cout << "[wrong img]\n";
+        std::cout << "[wrong img]\n";  // 检查输入图像是否有效
         // std::getchar();
     }
+    
+    // 创建新的图像帧对象
     img_pose_ = std::make_shared< Image_frame >(g_cam_K);
-    cv::Mat img_in_clone = img_in.clone();
-    // img_pose_->set_intrinsic(g_cam_K);
-    img_pose_->m_timestamp = img_time;
-    img_pose_->m_raw_img = img_in_clone;  //
-    // img_pose_->m_img = img_in_clone;
-    cv::remap( img_in_clone, img_pose_->m_img, m_ud_map1, m_ud_map2, cv::INTER_LINEAR );  //
-    img_pose_->init_cubic_interpolation();      //
-    img_pose_->image_equalize();                        //
-    img_pose_->set_pose(q_wc, t_wc);  //Twc
+    cv::Mat img_in_clone = img_in.clone();  // 复制输入图像
+    
+    // 设置图像帧的基本信息
+    img_pose_->m_timestamp = img_time;      // 设置时间戳
+    img_pose_->m_raw_img = img_in_clone;    // 保存原始图像
+    
+    // 图像去畸变：使用预计算的映射表进行快速去畸变
+    cv::remap( img_in_clone, img_pose_->m_img, m_ud_map1, m_ud_map2, cv::INTER_LINEAR );
+    
+    img_pose_->init_cubic_interpolation();  // 初始化立方插值（用于亚像素精度）
+    img_pose_->image_equalize();            // 图像直方图均衡化（增强对比度）
+    img_pose_->set_pose(q_wc, t_wc);        // 设置相机位姿 Twc（世界到相机的变换）
 
-    // [3] 
+    // [3] 处理第一帧图像的特殊逻辑
     if (!handle_first_img_done_)
     {
-        img_pose_->set_frame_idx(frame_idx_);
-        std::vector< cv::Point2f >                pts_2d_vec;   //
-        std::vector< std::shared_ptr< RGB_pts > > rgb_pts_vec;  //
-        if (m_map_rgb_pts.m_rgb_pts_vec.size() <= 100)  //
+        img_pose_->set_frame_idx(frame_idx_);  // 设置帧索引
+        
+        std::vector< cv::Point2f >                pts_2d_vec;   // 2D像素点向量
+        std::vector< std::shared_ptr< RGB_pts > > rgb_pts_vec;  // 对应的3D RGB点向量
+        
+        // 检查全局RGB地图点数量是否足够
+        if (m_map_rgb_pts.m_rgb_pts_vec.size() <= 100)
         {
-            return;
+            return;  // 地图点太少，跳过当前帧
         }
-        // m_map_rgb_pts.selection_points_for_projection( img_pose_, &rgb_pts_vec, &pts_2d_vec, m_track_windows_size / m_vio_scale_factor );
-        Eigen::aligned_vector<Eigen::Vector3d> fake_points;
-        Eigen::aligned_vector<Eigen::Vector2d> fake_pixs;
-        m_map_rgb_pts.selection_points_for_projection( false, fake_points, fake_pixs, img_pose_, &rgb_pts_vec, &pts_2d_vec, m_track_windows_size / 2 );  //40 / 2 = 20
+        
+        // 从全局地图中选择合适的点进行投影
+        Eigen::aligned_vector<Eigen::Vector3d> fake_points;  // 虚拟3D点（未使用）
+        Eigen::aligned_vector<Eigen::Vector2d> fake_pixs;    // 虚拟2D点（未使用）
+        // 选择可投影到当前图像的地图点，搜索窗口大小为 m_track_windows_size / 2 = 40 / 2 = 20
+        m_map_rgb_pts.selection_points_for_projection( false, fake_points, fake_pixs, img_pose_, 
+                                                      &rgb_pts_vec, &pts_2d_vec, m_track_windows_size / 2 );
+        
         // LOG(INFO) << "[handle first img time] " << img_time;
         // LOG(INFO) << "[first_rgb_pts_vec size] " << rgb_pts_vec.size();
+        
+        // 如果找到足够的匹配点，初始化跟踪器
         if (rgb_pts_vec.size() >= 10)
         {
-            handle_first_img_done_ = true;
-            op_track.init( img_pose_, rgb_pts_vec, pts_2d_vec );
-            frame_idx_++;
-            op_track.last_img = img_pose_->m_img_gray.clone();
+            handle_first_img_done_ = true;  // 标记第一帧处理完成
+            op_track.init( img_pose_, rgb_pts_vec, pts_2d_vec );  // 初始化光流跟踪器
+            frame_idx_++;  // 增加帧索引
+            op_track.last_img = img_pose_->m_img_gray.clone();  // 保存当前帧作为参考
         }
-        return;
+        return;  // 第一帧处理完毕，直接返回
     }
 
-    frame_idx_++;
+    frame_idx_++;  // 增加帧索引
 
-    // [4]
-    op_track.track_img( img_pose_, -20 );
+    // [4] 光流跟踪：跟踪上一帧的特征点到当前帧
+    op_track.track_img( img_pose_, -20 );  // 执行光流跟踪，参数-20可能是搜索窗口大小
     // LOG(INFO) << "[inlier after fmat] " << op_track.m_current_tracked_pts.size();
-    op_track.inlier_aft_fmat = op_track.m_last_tracked_pts.size();
+    op_track.inlier_aft_fmat = op_track.m_last_tracked_pts.size();  // 记录基础矩阵筛选后的内点数
 
-    // [5]
-    op_track.remove_outlier_using_ransac_pnp( img_pose_, 1 );
+    // [5] RANSAC PnP外点剔除：使用3D-2D对应关系剔除跟踪错误的点
+    op_track.remove_outlier_using_ransac_pnp( img_pose_, 1 );  // 执行RANSAC PnP，参数1可能是迭代次数或阈值
     // LOG(INFO) << "[inlier after pnp] " << op_track.m_current_tracked_pts.size();
-    op_track.inlier_aft_pnp = op_track.m_last_tracked_pts.size();
+    op_track.inlier_aft_pnp = op_track.m_last_tracked_pts.size();  // 记录PnP筛选后的内点数
 
+    // 统计信息输出：跟踪后、基础矩阵筛选后、PnP筛选后的内点数量
     // LOG(INFO) << "[inlieraft track | fmat | pnp] " << op_track.inlier_aft_track << " " << op_track.inlier_aft_fmat << " " << op_track.inlier_aft_pnp;
+    
+    // 保存当前帧作为下一次跟踪的参考帧
     op_track.last_img = img_pose_->m_img_gray.clone();
 }
 
-void R3LIVE::AssociateNewPointsToCurrentImg(const Eigen::Quaterniond& q_wc, const Eigen::Vector3d& t_wc)
+// 为当前图像关联新的地图点：将全局地图点投影到当前图像中进行跟踪
+void R3LIVE::AssociateNewPointsToCurrentImg(const Eigen::Quaterniond& q_wc,   // 世界到相机的旋转四元数
+                                           const Eigen::Vector3d& t_wc)      // 世界到相机的平移向量
 {
+    // 检查是否已完成第一帧图像的处理
     if (!handle_first_img_done_)
     {
-        return;
+        return;  // 如果第一帧尚未处理完成，直接返回
     }
-    // img_pose_->set_pose(q_wc.inverse(), - q_wc.toRotationMatrix().inverse() * t_wc);
-    img_pose_->set_pose(q_wc, t_wc);  //Twc
+    
+    // 设置当前图像帧的位姿
+    // 注释掉的代码：img_pose_->set_pose(q_wc.inverse(), - q_wc.toRotationMatrix().inverse() * t_wc);
+    img_pose_->set_pose(q_wc, t_wc);  // 设置相机位姿 Twc（世界到相机的变换）
+    
+    // 设置视场边界容差：稍微扩展投影边界以包含更多可能的地图点
     img_pose_->m_fov_margin = -0.4;
+    
+    // 调试信息：输出关联前的跟踪点数量
     // LOG(INFO) << "[m_map_rgb_pts_in_last_frame_pos size before] " << op_track.m_map_rgb_pts_in_last_frame_pos.size();
-    op_track.update_and_append_track_pts( img_pose_, m_map_rgb_pts, m_track_windows_size / 2, 1000000 );
+    
+    // 更新和添加跟踪点：将全局地图点投影到当前图像中
+    op_track.update_and_append_track_pts( img_pose_,                    // 当前图像帧
+                                         m_map_rgb_pts,                 // 全局RGB地图点
+                                         m_track_windows_size / 2,      // 搜索窗口大小的一半
+                                         1000000 );                    // 最大处理点数限制
 
+    // 调试信息：输出关联后的跟踪点数量
     // LOG(INFO) << "[m_map_rgb_pts_in_last_frame_pos size after] " << op_track.m_map_rgb_pts_in_last_frame_pos.size();
 }

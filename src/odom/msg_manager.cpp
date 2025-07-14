@@ -449,42 +449,52 @@ namespace cocolic
   }
 
   /// 
+  // 从缓冲区中获取指定时间区间内的传感器数据
   bool MsgManager::GetMsgs(NextMsgs &msgs, int64_t traj_last_max, int64_t traj_max, int64_t start_time)
   {
-    msgs.Clear();
+    msgs.Clear();  // 清空消息容器
 
+    // 基本条件检查：IMU和激光雷达缓冲区不能为空
     if (imu_buf_.empty() || lidar_buf_.empty())
     {
       return false;
     }
+    
+    // 检查当前IMU时间戳是否足够覆盖目标时间区间
     if (cur_imu_timestamp_ - start_time < traj_max)
     {
       return false;
     }
 
-    /// 1 
-    // 
+    /// 1. 检查所有激光雷达是否都有足够的数据
+    
+    // 统计缓冲区中有多少个不同的激光雷达ID
     std::vector<int> unique_lidar_ids;
     for (const auto &data : lidar_buf_)
     {
+      // 如果该激光雷达ID已经存在，跳过
       if (std::find(unique_lidar_ids.begin(), unique_lidar_ids.end(),
                     data.lidar_id) != unique_lidar_ids.end())
         continue;
-      unique_lidar_ids.push_back(data.lidar_id);
+      unique_lidar_ids.push_back(data.lidar_id);  // 添加新的激光雷达ID
     }
+    
+    // 检查是否所有激光雷达都有数据
     if (unique_lidar_ids.size() != num_lidars_)
     {
       return false;
     }
-    // 
+    
+    // 检查每个激光雷达的最大时间戳是否都满足要求
     for (auto t : lidar_max_timestamps_)
     {
-      if (t < traj_max)
+      if (t < traj_max)  // 如果某个激光雷达的最大时间戳小于目标时间
       {
         return false;
       }
     }
-    // 
+    
+    // 如果使用图像，检查图像数据是否足够
     if (use_image_)
     {
       if (image_max_timestamp_ < traj_max)
@@ -493,45 +503,53 @@ namespace cocolic
       }
     }
 
-    /// 2 
+    /// 2. 处理激光雷达数据：提取指定时间区间内的点云数据
+    
     for (auto it = lidar_buf_.begin(); it != lidar_buf_.end();)
     {
+      // 如果当前激光雷达数据的时间戳大于等于目标时间，跳过
       if (it->timestamp >= traj_max)
       {
         ++it;
         continue;
       }
+      
+      // 尝试将当前激光雷达数据添加到消息中
       bool add_entire_scan = AddToMsg(msgs, it, traj_max);
-      if (add_entire_scan)
+      
+      if (add_entire_scan)  // 如果整个扫描都被添加了
       {
-        it = lidar_buf_.erase(it); // 
+        it = lidar_buf_.erase(it);  // 从缓冲区中移除该数据
       }
-      else
+      else  // 如果只添加了部分数据
       {
-        ++it; // 
+        ++it;  // 保留该数据，继续处理下一个
       }
     }
     // LOG(INFO) << "[msgs_scan_num] " << msgs.scan_num;
 
-    /// 3 
+    /// 3. 处理图像数据：选择合适的图像帧
+    
     if (use_image_)
     {
-      /// 
+      /// 查找时间区间 [traj_last_max, traj_max) 内最后一个图像帧
       int img_idx = INT_MAX;
       for (int i = 0; i < image_buf_.size(); i++)
       {
+        // 如果图像时间戳在目标时间区间内
         if (image_buf_[i].timestamp >= traj_last_max &&
             image_buf_[i].timestamp < traj_max)
         {
-          img_idx = i;
+          img_idx = i;  // 记录符合条件的图像索引（会选择最后一个）
         }
+        // 如果图像时间戳超过目标时间，停止搜索
         if (image_buf_[i].timestamp >= traj_max)
         {
           break;
         }
       }
 
-      /// 
+      /// 注释掉的代码：选择第一个符合条件的图像帧
       // int img_idx = INT_MAX;
       // for (int i = 0; i < image_buf_.size(); i++)
       // {
@@ -539,24 +557,25 @@ namespace cocolic
       //       image_buf_[i].timestamp < traj_max)
       //   {
       //     img_idx = i;
-      //     break;
+      //     break;  // 这里是break，会选择第一个符合条件的
       //   }
       // }
 
+      // 如果找到了合适的图像帧
       if (img_idx != INT_MAX)
       {
-        AddImageToMsg(msgs, image_buf_[img_idx], traj_max);
-        // image_buf_.erase(image_buf_.begin() + img_idx);
+        AddImageToMsg(msgs, image_buf_[img_idx], traj_max);  // 添加图像到消息中
+        // image_buf_.erase(image_buf_.begin() + img_idx);  // 注释掉：不立即删除图像
       }
       else
       {
-        msgs.if_have_image = false;
+        msgs.if_have_image = false;  // 标记没有找到合适的图像
         // std::cout << "[GetMsgs does not get a image]\n";
         // std::getchar();
       }
     }
 
-    return true;
+    return true;  // 成功获取到消息数据
   }
 
   void MsgManager::IMUMsgHandle(const sensor_msgs::Imu::ConstPtr &imu_msg)
