@@ -40,11 +40,13 @@ find_package(Eigen3 REQUIRED)
 find_package(Ceres REQUIRED)
 # find_package(Sophus REQUIRED)
 find_package(OpenCV REQUIRED)
-find_package(PCL 1.13.0 REQUIRED)
+find_package(PCL REQUIRED)
 
 # find_package(yaml-cpp REQUIRED)
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(YAML_CPP REQUIRED yaml-cpp>=0.5)
+# pkg_check_modules(YAML_CPP REQUIRED yaml-cpp>=0.5)
+
+find_package(yaml-cpp REQUIRED)
 
 ## Generate messages in the 'msg' folder
 add_message_files(
@@ -82,7 +84,8 @@ include_directories(
   src/camera/rgb_map
 )
 list(APPEND thirdparty_libraries
-        ${YAML_CPP_LIBRARIES}
+        # ${YAML_CPP_LIBRARIES}
+        yaml-cpp
         ${Boost_LIBRARIES}
         ${catkin_LIBRARIES}
         ${OpenCV_LIBS}

@@ -456,10 +456,10 @@ public:
         // cube_points_add = boost::make_shared<PointCloudXYZINormal>();
         // laserCloudFullRes2 = boost::make_shared<PointCloudXYZINormal>();
         // laserCloudFullResColor = boost::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
-        featsFromMap = std::make_shared<PointCloudXYZINormal>();
-        cube_points_add = std::make_shared<PointCloudXYZINormal>();
-        laserCloudFullRes2 = std::make_shared<PointCloudXYZINormal>();
-        laserCloudFullResColor = std::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
+        featsFromMap = boost::make_shared<PointCloudXYZINormal>();
+        cube_points_add = boost::make_shared<PointCloudXYZINormal>();
+        laserCloudFullRes2 = boost::make_shared<PointCloudXYZINormal>();
+        laserCloudFullResColor = boost::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
 
         XAxisPoint_body = Eigen::Vector3f(LIDAR_SP_LEN, 0.0, 0.0);
         XAxisPoint_world = Eigen::Vector3f(LIDAR_SP_LEN, 0.0, 0.0);

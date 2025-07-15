@@ -20,7 +20,7 @@
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
-#include <pcl/type_traits.h>
+// #include <pcl/type_traits.h>
 #include <cmath>
 #include <pcl/filters/voxel_grid.h>
 
@@ -30,7 +30,7 @@ struct PointXYZIRT {
   PCL_ADD_POINT4D;                 // quad-word XYZ
   float intensity;                 ///< laser intensity reading
   uint16_t ring;                   ///< laser ring number
-  int64_t time;                      ///< laser time reading
+  double time;                      ///< laser time reading
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW  // ensure proper alignment
 } EIGEN_ALIGN16;
 
@@ -53,7 +53,7 @@ struct PointXYZIRTTmpHesai {
 struct OusterPointXYZIRT {
   PCL_ADD_POINT4D;
   float intensity;
-  int64_t t;
+  double t;
   uint16_t reflectivity;
   uint8_t ring;
   // uint16_t ambient;
@@ -98,7 +98,7 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(my_pcl::PointXYZIRT,           //
                                   (float, z, z)                  //
                                   (float, intensity, intensity)  //
                                   (uint16_t, ring, ring)         //
-                                  (int64_t, time, time)            //
+                                  (double, time, time)            //
 )
 
 POINT_CLOUD_REGISTER_POINT_STRUCT(my_pcl::PointXYZIRTTmp,           //
@@ -124,7 +124,7 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(my_pcl::OusterPointXYZIRT,              //
                                   (float, y, y)                           //
                                   (float, z, z)                           //
                                   (float, intensity, intensity)           //
-                                  (int64_t, t, t)                        //
+                                  (double, t, t)                        //
                                   (uint16_t, reflectivity, reflectivity)  //
                                   (uint8_t, ring, ring)                   //
                                   // (uint16_t, ambient, ambient)            //
