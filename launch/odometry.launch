@@ -1,11 +1,11 @@
 <?xml version="1.0"?>
 <launch>
   <arg name="project_path"       default = "" />
-  <arg name="config_path"       default = "/config/ct_odometry_r3live.yaml" />
+  <arg name="config_path"       default = "/config/ct_odometry_fastlivo2.yaml" />
   <!-- <arg name="config_path"       default = "/config/ct_odometry_fastlivo.yaml" /> -->
   <!-- <arg name="config_path"       default = "/config/ct_odometry_viral.yaml" /> -->
   <!-- <arg name="config_path"       default = "/config/ct_odometry_lvisam.yaml" /> -->
-  <arg name="bag_path"          default = "" />  
+  <arg name="bag_path"          default = "/home/goslam/Documents/数据集/fast-livo2/CBD_Building_02.bag" />  
   <arg name="pasue_time"        default = "-1" />
   <arg name="verbose"           default = "false" />  
   
