@@ -54,14 +54,14 @@ namespace cocolic
 
   // 设置里程计模式并输出提示信息
   odometry_mode_ = OdometryMode(node["odometry_mode"].as<int>());
-  std::cout << "\n🥥 Odometry Mode: ";
+  std::cout << "\n🥥 里程计模式: ";
   if (odometry_mode_ == LICO)
   {
-  std::cout << "LiDAR-Inertial-Camera Odometry 🥥" << std::endl;  // 激光雷达-惯性-相机里程计
+  std::cout << "激光雷达-惯性-相机里程计 🥥" << std::endl;  // 激光雷达-惯性-相机里程计
   }
   else if (odometry_mode_ == LIO)
   {
-  std::cout << "LiDAR-Inertial Odometry 🥥" << std::endl;  // 激光雷达-惯性里程计
+  std::cout << "激光雷达-惯性里程计 🥥" << std::endl;  // 激光雷达-惯性里程计
   }
 
   // 外参设置：传感器到IMU的变换矩阵
@@ -90,7 +90,7 @@ namespace cocolic
   lidar_iter_ = node["lidar_iter"].as<int>();  // 激光雷达迭代次数
   use_lidar_scale_ = node["use_lidar_scale"].as<bool>();  // 是否使用激光雷达尺度
   lidar_handler_ = std::make_shared<LidarHandler>(lidar_node, trajectory_);  // 创建激光雷达处理器
-  std::cout << "\n🍺 The number of multiple LiDARs is " << lidar_node["num_lidars"].as<int>() << "." << std::endl;
+  std::cout << "\n🍺 激光雷达数量: " << lidar_node["num_lidars"].as<int>() << "." << std::endl;
 
   // IMU初始化器
   imu_initializer_ = std::make_shared<IMUInitializer>(imu_node);  // 创建IMU初始化器
@@ -147,21 +147,45 @@ namespace cocolic
   // LOG(INFO) << std::fixed << std::setprecision(4);
   }
 
+  /**
+   * @brief 创建缓存文件夹路径
+   * @param config_path 配置文件路径
+   * @param bag_path rosbag文件路径
+   * @return 成功返回true，失败返回false
+   */
   bool OdometryManager::CreateCacheFolder(const std::string &config_path,
-                                          const std::string &bag_path)
+    const std::string &bag_path)
   {
-    boost::filesystem::path path_cfg(config_path);
-    boost::filesystem::path path_bag(bag_path);
-    if (path_bag.extension() != ".bag")
-    {
-      return false;
-    }
-    std::string bag_name_ = path_bag.stem().string();
+  // 使用boost::filesystem解析配置文件路径
+  boost::filesystem::path path_cfg(config_path);
 
-    std::string cache_path_parent_ = path_cfg.parent_path().string();
-    cache_path_ = cache_path_parent_ + "/data/" + bag_name_;
-    // boost::filesystem::create_directory(cache_path_);
-    return true;
+  // 使用boost::filesystem解析bag文件路径
+  boost::filesystem::path path_bag(bag_path);
+
+  // 检查输入的文件是否为rosbag格式（扩展名必须是.bag）
+  if (path_bag.extension() != ".bag")
+  {
+  return false;  // 如果不是.bag文件，返回失败
+  }
+
+  // 提取bag文件的名称（不包含扩展名）
+  // 例如：/path/to/data.bag -> data
+  std::string bag_name_ = path_bag.stem().string();
+
+  // 获取配置文件的父目录路径
+  // 例如：/home/user/project/config -> /home/user/project
+  std::string cache_path_parent_ = path_cfg.parent_path().string();
+
+  // 构建缓存文件夹的完整路径
+  // 格式：配置文件父目录/data/bag文件名
+  // 例如：/home/user/project/data/experiment1
+  cache_path_ = cache_path_parent_ + "/data/" + bag_name_;
+
+  // 注意：实际创建目录的代码被注释掉了
+  // 如果需要实际创建目录，可以取消下面这行的注释
+  // boost::filesystem::create_directory(cache_path_);
+
+  return true;  // 成功构建缓存路径，返回true
   }
 
   // 运行rosbag数据处理的主循环函数
@@ -879,7 +903,10 @@ namespace cocolic
         trajectory_, 0.0, trajectory_->maxTimeNURBS(), 0.1);
   }
 
-  // 发布3D高斯溅射建图数据：为3DGS算法提供图像、位姿和彩色点云数据
+  /**
+   * @brief 发布3D高斯溅射建图数据：为3DGS算法提供图像、位姿和彩色点云数据
+   * @param msg 当前处理的消息数据
+   */
   void OdometryManager::Publish3DGSMappingData(const NextMsgs& msg)
   {
     // 将当前数据加入缓冲队列
@@ -934,6 +961,10 @@ namespace cocolic
         int skip = lidar_skip_;                                      // 点云采样间隔
         Eigen::aligned_vector<Eigen::Vector3d> new_points;          // 输出：3D点坐标
         Eigen::aligned_vector<Eigen::Vector3i> new_colors;          // 输出：RGB颜色值
+        
+        // 创建PCL彩色点云用于ROS发布
+        pcl::PointCloud<pcl::PointXYZRGB>::Ptr colored_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+        colored_cloud->header.frame_id = "map";  // 设置坐标系
         
         // 遍历去畸变后的点云（按采样间隔）
         for (int i = 0; i < cloud_undistort_ds->points.size(); i += skip)
@@ -1005,9 +1036,28 @@ namespace cocolic
           }
           // 添加颜色信息（RGB格式）
           new_colors.push_back(Eigen::Vector3i(red, green, blue));
+          
+          // 【新增】创建PCL彩色点云点
+          pcl::PointXYZRGB colored_point;
+          colored_point.x = pt.x;
+          colored_point.y = pt.y;
+          colored_point.z = pt.z;
+          colored_point.r = red;
+          colored_point.g = green;
+          colored_point.b = blue;
+          colored_cloud->points.push_back(colored_point);
         }
         
-        // 发布带颜色的3D点云数据：转换为绝对时间戳
+        // 【新增】设置彩色点云的基本属性
+        colored_cloud->width = colored_cloud->points.size();
+        colored_cloud->height = 1;  // 无序点云
+        colored_cloud->is_dense = false;  // 可能包含无效点
+        
+        // 【新增】发布标准ROS格式的彩色点云
+        // 注意：需要在odometry_viewer.h中添加相应的发布器声明
+        odom_viewer_.PublishColoredPointCloud(colored_cloud, time + trajectory_->GetDataStartTime());
+        
+        // 原有的3DGS点云发布：转换为绝对时间戳
         odom_viewer_.Publish3DGSPoints(new_points, new_colors, time + trajectory_->GetDataStartTime());
       }
       else break;  // 如果没有更多稳定数据，退出循环

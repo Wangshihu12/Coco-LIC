@@ -170,64 +170,101 @@ namespace cocolic
     //           << " with duration " << (time_finish - time_start).toSec();
   }
 
+  /**
+   * @brief 从rosbag中读取并处理一帧数据
+   * @details 这是消息管理器的核心函数，负责按时间顺序读取rosbag中的消息
+   *          并根据消息话题类型分发到相应的处理函数
+   */
   void MsgManager::SpinBagOnce()
   {
+    // 使用静态迭代器遍历rosbag，保持上次读取的位置
     static rosbag::View::iterator view_iterator = view_.begin();
+    
+    // 检查是否已经读取完所有消息
     if (view_iterator == view_.end())
     {
-      has_valid_msg_ = false;
-      // LOG(INFO) << "End of bag";
-      return;
+      has_valid_msg_ = false;  // 标记没有有效消息
+      // LOG(INFO) << "End of bag";  // 可选的日志输出
+      return;  // 结束函数执行
     }
 
+    // 获取当前消息实例
     const rosbag::MessageInstance &m = *view_iterator;
-    std::string msg_topic = m.getTopic();
-    auto msg_time = m.getTime();
+    
+    // 提取消息的话题名称和时间戳
+    std::string msg_topic = m.getTopic();      // 消息所属的ROS话题
+    auto msg_time = m.getTime();               // 消息的时间戳
 
-    if (msg_topic == imu_topic_)  // imu
+    // 根据话题名称判断消息类型并进行相应处理
+    if (msg_topic == imu_topic_)  // 处理IMU数据
     {
+      // 将消息实例化为IMU消息类型
       sensor_msgs::Imu::ConstPtr imu_msg = m.instantiate<sensor_msgs::Imu>();
+      // 调用IMU消息处理函数
       IMUMsgHandle(imu_msg);
     }
+    // 检查是否为激光雷达数据话题
     else if (std::find(lidar_topics_.begin(), lidar_topics_.end(), msg_topic) !=
-             lidar_topics_.end())  // lidar
+            lidar_topics_.end())  // 处理激光雷达数据
     {
+      // 找到当前话题在激光雷达话题列表中的索引位置
       auto it = std::find(lidar_topics_.begin(), lidar_topics_.end(), msg_topic);
-      auto idx = std::distance(lidar_topics_.begin(), it);
-      if (lidar_types[idx] == VLP)  //[rotating lidar: Velodyne、Ouster、Hesai]
+      auto idx = std::distance(lidar_topics_.begin(), it);  // 计算索引
+      
+      // 根据激光雷达类型选择不同的处理方式
+      if (lidar_types[idx] == VLP)  // 处理旋转式激光雷达：Velodyne、Ouster、Hesai
       {
+        // 类型安全检查：确保消息类型为PointCloud2
         if (!m.isType<sensor_msgs::PointCloud2>())
           std::cout << "Wrong type\n";
 
+        // 实例化为PointCloud2消息
         auto lidar_msg = m.instantiate<sensor_msgs::PointCloud2>();
+        
+        // 检查消息时间戳的一致性（rosbag时间 vs 消息头时间）
         CheckLidarMsgTimestamp(msg_time.toSec(), lidar_msg->header.stamp.toSec());
+        
+        // 调用Velodyne类型激光雷达的处理函数
         VelodyneMsgHandle(lidar_msg, idx);
-        // VelodyneMsgHandleNoFeature(lidar_msg, idx);
+        // VelodyneMsgHandleNoFeature(lidar_msg, idx);  // 可选：无特征提取版本
       }
-      else if (lidar_types[idx] == LIVOX)  //[solid-state lidar: Livox]
+      else if (lidar_types[idx] == LIVOX)  // 处理固态激光雷达：Livox
       {
+        // 类型安全检查：确保消息类型为Livox自定义消息
         if (!m.isType<livox_ros_driver::CustomMsg>())
           std::cout << "Wrong type\n";
 
+        // 实例化为Livox自定义消息类型
         auto lidar_msg = m.instantiate<livox_ros_driver::CustomMsg>();
+        
+        // 检查消息时间戳的一致性
         CheckLidarMsgTimestamp(msg_time.toSec(), lidar_msg->header.stamp.toSec());
+        
+        // 调用Livox激光雷达的处理函数
         LivoxMsgHandle(lidar_msg, idx);
       }
     }
-    else if (msg_topic == image_topic_ || msg_topic == image_topic_compressed_)  // camera
+    // 检查是否为相机数据话题（支持原始和压缩格式）
+    else if (msg_topic == image_topic_ || msg_topic == image_topic_compressed_)  // 处理相机数据
     {
-      if (m.getDataType() == "sensor_msgs/CompressedImage")
+      // 根据消息数据类型选择相应的处理方式
+      if (m.getDataType() == "sensor_msgs/CompressedImage")  // 压缩图像格式
       {
+        // 实例化为压缩图像消息
         sensor_msgs::CompressedImageConstPtr image_msg = m.instantiate<sensor_msgs::CompressedImage>();
+        // 调用图像消息处理函数
         ImageMsgHandle(image_msg);
       }
-      else if (m.getDataType() == "sensor_msgs/Image")
+      else if (m.getDataType() == "sensor_msgs/Image")  // 原始图像格式
       {
+        // 实例化为原始图像消息
         sensor_msgs::ImageConstPtr image_msg = m.instantiate<sensor_msgs::Image>();
+        // 调用图像消息处理函数
         ImageMsgHandle(image_msg);
       }
     }
 
+    // 移动到下一个消息，为下次调用做准备
     view_iterator++;
   }
 

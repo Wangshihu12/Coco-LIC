@@ -106,6 +106,7 @@ namespace cocolic
     ros::Publisher pub_gs_image_;
     ros::Publisher pub_gs_pose_;
     ros::Publisher pub_gs_points_;
+    ros::Publisher pub_colored_cloud_;  // 彩色点云发布器
 
     // Not used
     ros::Publisher pub_icp_target_cloud_;
@@ -189,6 +190,8 @@ namespace cocolic
       pub_gs_pose_ = nh.advertise<geometry_msgs::PoseStamped>("/pose_for_gs", 1000);
       pub_gs_points_ = nh.advertise<sensor_msgs::PointCloud2>("/points_for_gs", 1000);
 
+      pub_colored_cloud_ = nh.advertise<sensor_msgs::PointCloud2>("/colored_pointcloud", 10);
+
       // std::cout << "[SetPublisher] init done.\n";
     }
 
@@ -252,6 +255,20 @@ namespace cocolic
       output_msg.header.stamp = time_tool.fromNSec(img_time);
       output_msg.header.frame_id = "map";
       pub_gs_points_.publish(output_msg);
+    }
+
+    void PublishColoredPointCloud(
+      const pcl::PointCloud<pcl::PointXYZRGB>::Ptr& cloud, 
+      int64_t timestamp_ns)
+    {
+      // if (pub_colored_cloud_.getNumSubscribers() == 0) return;
+
+      sensor_msgs::PointCloud2 cloud_msg;
+      pcl::toROSMsg(*cloud, cloud_msg);
+      cloud_msg.header.stamp = ros::Time().fromNSec(timestamp_ns);
+      cloud_msg.header.frame_id = "map";
+
+      pub_colored_cloud_.publish(cloud_msg);
     }
 
     void PublishTrackImg(const sensor_msgs::ImagePtr &img)
