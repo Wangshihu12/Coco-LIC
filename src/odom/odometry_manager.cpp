@@ -190,7 +190,7 @@ namespace cocolic
         if (imu_initializer_->StaticInitialIMUState())  // 如果静态初始化成功
         {
           SetInitialState();  // 设置初始状态
-          std::cout << "\n🍺 Static initialization succeeds.\n";  // 输出成功信息
+          std::cout << "\n🍺 imu 静止初始化成功.\n";  // 输出成功信息
           std::cout << "\n🍺 Trajectory start time: " << trajectory_->GetDataStartTime() << " ns.\n";
         }
         else

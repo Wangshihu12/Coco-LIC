@@ -1,4 +1,6 @@
-odometry_mode: 1  # LIO = 0, LICO = 1
+odometry_mode: 0  # LIO = 0, LICO = 1
+
+use_subscriber_mode: true  # false: 使用bag文件模式, true: 使用订阅者模式
 
 lidar_yaml: /fastlivo2/lidar.yaml
 imu_yaml: /fastlivo2/imu.yaml

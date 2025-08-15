@@ -92,24 +92,52 @@ namespace cocolic
     LidarHandler(cur_cloud);
   }
 
+  /**
+   * [功能描述]：机械雷达点云特征提取的主处理函数，将原始点云转换为距离图像并提取角点和表面特征
+   * 实现完整的点云预处理、特征分类和提取流程
+   * @param raw_cloud：输入的原始RTPointCloud格式点云指针，包含XYZ坐标、强度、环号和时间信息
+   */
   void VelodyneFeatureExtraction::LidarHandler(
       const RTPointCloud::Ptr raw_cloud)
   {
+    // 重置角点特征点云容器，清除上一帧的角点数据
     p_corner_cloud.reset(new RTPointCloud());
+    // 重置表面特征点云容器，清除上一帧的表面特征数据  
     p_surface_cloud.reset(new RTPointCloud());
 
+    // 根据点云组织形式选择不同的距离图像转换方法
     if (raw_cloud->isOrganized())
+      // 处理有序点云：直接利用点云的行列结构信息转换为距离图像
+      // 有序点云保持了雷达扫描的几何结构，可以高效地转换为距离图像
       OrganizedCloudToRangeImage(raw_cloud, range_mat, p_full_cloud);
     else
+      // 处理无序点云：根据点的环号(ring)和方位角重新组织为距离图像
+      // 无序点云需要重新计算每个点在距离图像中的位置
       RTCloudToRangeImage(raw_cloud, range_mat, p_full_cloud);
 
-    // [range_mat] and [p_full_cloud] are ready.
+    // 注释说明：此时距离矩阵[range_mat]和完整点云[p_full_cloud]已准备就绪
+    
+    // 第一步：点云提取和有效性检查
+    // 从距离图像中提取有效点云，过滤掉无效点、地面点等
     CloudExtraction();
+    
+    // 第二步：计算点云平滑度
+    // 为每个点计算曲率值，作为特征分类的重要依据
     CaculateSmoothness();
+    
+    // 第三步：标记遮挡点
+    // 识别和标记由于物体遮挡造成的不连续边界点，避免错误特征提取
     MarkOccludedPoints();
+    
+    // 第四步：特征提取
+    // 根据曲率值将点分类为角点特征（高曲率）和表面特征（低曲率）
     ExtractFeatures();
+    
+    // 第五步：重置参数
+    // 清理临时变量和缓存，为处理下一帧点云做准备
     ResetParameters();
 
+    // 发布处理后的点云数据到"map"坐标系，用于可视化和调试
     PublishCloud("map");
   }
 
@@ -135,63 +163,91 @@ namespace cocolic
     return flag;
   }
 
+  /**
+   * [功能描述]：解析不同类型机械雷达的PointCloud2消息，自动识别消息格式并转换为统一的RTPointCloud格式
+   * 支持Velodyne、Ouster、Hesai等品牌雷达的数据格式自动适配
+   * @param lidar_msg：输入的雷达PointCloud2消息常量智能指针
+   * @param out_cloud：输出的RTPointCloud格式点云指针，统一的内部点云表示
+   * @return 布尔值，表示消息解析是否成功（字段检查是否通过）
+   */
   bool VelodyneFeatureExtraction::ParsePointCloud(
       const sensor_msgs::PointCloud2::ConstPtr &lidar_msg,
       RTPointCloud::Ptr out_cloud) const
   {
-    static bool has_checked = false;
-    static bool check_field_passed = false;
-    static bool has_t_field = false;
-    static bool has_time_field = false;
-    static bool has_timestamp_field = false;
+    // 静态变量：用于记录首次消息字段检查的结果，避免重复检查提高效率
+    static bool has_checked = false;          // 是否已经进行过字段检查
+    static bool check_field_passed = false;  // 字段检查是否通过标志
+    static bool has_t_field = false;         // 是否有"t"字段（Ouster雷达使用）
+    static bool has_time_field = false;      // 是否有"time"字段（Velodyne雷达使用）
+    static bool has_timestamp_field = false; // 是否有"timestamp"字段（Hesai雷达使用）
 
-    /// Check ring channel and point time for the first msg
+    /// 首次消息字段检查：识别雷达类型和时间戳字段格式
     if (!has_checked)
     {
+      // 设置检查完成标志，确保只检查一次
       has_checked = true;
+      // 检查是否存在"ring"字段，所有支持的雷达都应该有此字段
       bool has_ring_field = CheckMsgFields(*lidar_msg, "ring");
-      has_time_field = CheckMsgFields(*lidar_msg, "time");           // float s -> Velodyne: lvi、lio
-      has_t_field = CheckMsgFields(*lidar_msg, "t");                 // uint32_t ns -> Ouster: viral
-      has_timestamp_field = CheckMsgFields(*lidar_msg, "timestamp"); // float s -> Hesai-PandarQT
+      // 检查Velodyne雷达的时间字段："time"（float类型，秒为单位）
+      // 适用于LVI-SAM、LIO-SAM等数据集
+      has_time_field = CheckMsgFields(*lidar_msg, "time");
+      // 检查Ouster雷达的时间字段："t"（uint32_t类型，纳秒为单位）
+      // 适用于VIRAL等数据集
+      has_t_field = CheckMsgFields(*lidar_msg, "t");
+      // 检查Hesai雷达的时间字段："timestamp"（float类型，秒为单位）
+      // 适用于Hesai PandarQT等雷达
+      has_timestamp_field = CheckMsgFields(*lidar_msg, "timestamp");
 
+      // 综合字段检查结果：必须有ring字段，且至少有一种时间字段
       check_field_passed = has_ring_field && (has_time_field || has_t_field || has_timestamp_field);
 
+      // 调试信息（已注释）：用于提示缺失的字段信息
       // if (!has_ring_field)
       //   LOG(WARNING) << "[ParsePointCloud] input cloud NOT has [ring] field";
-
+      
       // if (!has_time_field && !has_t_field && !has_timestamp_field)
       //   LOG(WARNING)
       //       << "[ParsePointCloud] input cloud NOT has [time] or [t] or [timestamp] field";
     }
 
-    /// convert cloud
+    /// 根据检查结果进行点云格式转换
     if (check_field_passed)
     {
+      // 处理Velodyne雷达格式：使用"time"字段（float类型秒时间戳）
       if (has_time_field)
       {
-        // for velodyne
+        // 创建Velodyne临时点云容器（RTPointTmp格式）
         RTPointCloudTmp::Ptr tmp_out_cloud(new RTPointCloudTmp);
+        // 将ROS消息转换为PCL点云格式
         pcl::fromROSMsg(*lidar_msg, *tmp_out_cloud);
 
+        // 将临时点云转换为统一的RTPointCloud格式（时间字段从float转为double）
         RTPointCloudTmp2RTPointCloud(tmp_out_cloud, out_cloud);
       }
+      // 处理Ouster雷达格式：使用"t"字段（uint32_t类型纳秒时间戳）
       else if (has_t_field)
       {
-        // for ouster 64
+        // 创建Ouster临时点云容器（OusterPointTmp格式）
         OusterPointCloudTmp::Ptr tmp_out_cloud(new OusterPointCloudTmp());
+        // 将ROS消息转换为PCL点云格式
         pcl::fromROSMsg(*lidar_msg, *tmp_out_cloud);
 
+        // 将Ouster点云转换为统一的RTPointCloud格式（时间单位从纳秒转为秒）
         OusterPointCloudTmp2RTPointCloud(tmp_out_cloud, out_cloud);
       }
+      // 处理Hesai雷达格式：使用"timestamp"字段（double类型秒时间戳）
       else if (has_timestamp_field)
       {
-        // for hesai pandar
+        // 创建Hesai临时点云容器（RTPointTmpHesai格式）
         RTPointCloudTmpHesai::Ptr tmp_out_cloud(new RTPointCloudTmpHesai);
+        // 将ROS消息转换为PCL点云格式
         pcl::fromROSMsg(*lidar_msg, *tmp_out_cloud);
 
+        // 将Hesai点云转换为统一的RTPointCloud格式
         RTPointCloudTmp2RTPointCloudHesai(tmp_out_cloud, out_cloud);
       }
     }
+    // 返回字段检查结果，表示消息解析是否成功
     return check_field_passed;
   }
 

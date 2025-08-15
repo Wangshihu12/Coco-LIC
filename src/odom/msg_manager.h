@@ -211,32 +211,57 @@ namespace cocolic
 
     int NumLiDAR() const { return num_lidars_; }
 
+    /**
+     * [功能描述]：将ROS标准IMU消息转换为系统内部使用的IMUData结构体格式
+     * 处理时间戳转换、传感器数据提取和单位标准化
+     * @param imu_msg：输入的ROS IMU消息常量智能指针，包含角速度、加速度和方向信息
+     * @param data：输出的IMUData结构体引用，用于存储转换后的IMU数据
+     */
     inline void IMUMsgToIMUData(const sensor_msgs::Imu::ConstPtr &imu_msg,
                                 IMUData &data)
     {
+      // 时间戳转换：将ROS时间戳（秒）转换为纳秒单位，确保高精度时间表示
       data.timestamp = imu_msg->header.stamp.toSec() * S_TO_NS;
+      
+      // 角速度数据提取：从ROS消息中提取三轴陀螺仪数据（单位：rad/s）
       data.gyro = Eigen::Vector3d(imu_msg->angular_velocity.x,
                                   imu_msg->angular_velocity.y,
                                   imu_msg->angular_velocity.z);
+      
+      // 线性加速度数据处理：根据配置决定是否需要单位转换
       if (if_normalized_)
       {
+        // 标准化模式：输入加速度为重力单位（g），需乘以9.81转换为m/s²
+        // 适用于已经进行重力标准化的IMU数据（如某些MEMS IMU）
         data.accel = Eigen::Vector3d(imu_msg->linear_acceleration.x * 9.81,
                                      imu_msg->linear_acceleration.y * 9.81,
                                      imu_msg->linear_acceleration.z * 9.81);
       }
       else
       {
+        // 非标准化模式：输入加速度已经是m/s²单位，直接使用
+        // 适用于大多数标准IMU传感器的原始输出
         data.accel = Eigen::Vector3d(imu_msg->linear_acceleration.x,
                                      imu_msg->linear_acceleration.y,
                                      imu_msg->linear_acceleration.z);
       }
+      
+      // 注释掉的代码：之前版本可能手动添加重力补偿
       //  imu_msg->linear_acceleration.z + 9.81);
+      
+      // 四元数方向数据提取：从ROS消息中提取姿态四元数（w, x, y, z格式）
       Eigen::Vector4d q(imu_msg->orientation.w, imu_msg->orientation.x,
                         imu_msg->orientation.y, imu_msg->orientation.z);
+      
+      // 四元数有效性检查：只有当四元数接近单位长度时才进行转换
+      // 阈值0.01允许一定的数值误差，避免未初始化或无效的四元数数据
       if (std::fabs(q.norm() - 1) < 0.01)
       {
+        // 将有效的四元数转换为SO3d类型（李群表示的旋转）
+        // 用于后续的姿态估计和优化计算
         data.orientation = SO3d(Eigen::Quaterniond(q[0], q[1], q[2], q[3]));
       }
+      // 注意：如果四元数无效，orientation字段保持默认值（通常为单位四元数）
     }
 
     static void CheckLidarMsgTimestamp(double ros_bag_time, double msg_time)
@@ -309,6 +334,16 @@ namespace cocolic
 
     int64_t cur_imu_timestamp_;
     int64_t cur_pose_timestamp_;
+
+    bool use_subscriber_mode_;  // 模式开关
+
+    void InitializeSubscribers(ros::NodeHandle &nh);  // 初始化订阅者
+    // 订阅者回调函数
+    void IMUCallback(const sensor_msgs::Imu::ConstPtr &msg);
+    void VelodyneCallback(const sensor_msgs::PointCloud2::ConstPtr &msg, int lidar_id);
+    void LivoxCallback(const livox_ros_driver::CustomMsg::ConstPtr &msg, int lidar_id);  
+    void ImageCallback(const sensor_msgs::ImageConstPtr &msg);
+    void CompressedImageCallback(const sensor_msgs::CompressedImageConstPtr &msg);
 
   private:
     // int64_t cur_imu_timestamp_;

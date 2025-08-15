@@ -208,39 +208,76 @@ SE3d Trajectory::GetSensorPoseNURBS(const int64_t timestamp,
   return pose_S_to_G;
 }
 
+/**
+ * [功能描述]：将轨迹数据保存为TUM格式的文本文件，用于轨迹评估和可视化
+ * TUM格式：timestamp x y z qx qy qz qw（时间戳 位置 四元数方向）
+ * @param traj_path：输出轨迹文件的路径
+ * @param maxtime：轨迹的最大时间（纳秒）
+ * @param is_evo_viral：是否为VIRAL数据集格式，需要特殊的坐标变换
+ * @param dt：轨迹采样时间间隔（秒）
+ */
 void Trajectory::ToTUMTxt(std::string traj_path, int64_t maxtime, bool is_evo_viral, double dt) {
+  // 创建输出文件流对象
   std::ofstream outfile;
+  // 打开指定路径的输出文件
   outfile.open(traj_path);
+  // 设置输出格式为定点数表示（避免科学计数法）
   outfile.setf(std::ios::fixed);
 
+  // 设置轨迹时间范围：从0开始到指定的最大时间
   int64_t min_time = 0;
   int64_t max_time = maxtime;
+  // 将时间间隔从秒转换为纳秒单位
   int64_t dt_ns = dt * S_TO_NS;
+  
+  // 用于计算轨迹起始到结束的变换（用于评估轨迹漂移）
   SE3d start_end;
+  // 获取轨迹起始时刻的IMU位姿作为参考
   SE3d start_pose = GetIMUPoseNsNURBS(min_time);
+  
+  // 遍历整个时间范围，按指定间隔采样轨迹点
   for (int64_t t = min_time; t < max_time; t += dt_ns) {
+    // 使用NURBS样条插值获取当前时刻的IMU位姿
     SE3d pose = GetIMUPoseNsNURBS(t);
+    // 提取位置信息（x, y, z坐标）
     Eigen::Vector3d p = pose.translation();
+    // 提取姿态信息（单位四元数）
     Eigen::Quaterniond q = pose.unit_quaternion();
+    // 计算相对于起始位姿的变换，用于后续漂移分析
     start_end = start_pose.inverse() * pose;
 
-    /// for VIRAL
+    /// 针对VIRAL数据集的特殊坐标变换处理
     if (is_evo_viral) {
+      // 对位置进行特定的坐标变换：考虑传感器安装偏移
+      // 向量(-0.293656, -0.012288, -0.273095)是VIRAL数据集中的标定参数
       p = (q.toRotationMatrix() * Eigen::Vector3d(-0.293656, -0.012288, -0.273095) + p).eval();
     }
   
+    // 计算相对于数据包开始时间的绝对时间戳（秒）
     double relative_bag_time = (data_start_time_ + t) * NS_TO_S;
+    
+    // 设置时间戳输出精度为9位小数
     outfile.precision(9);
     outfile << relative_bag_time << " ";
+    // 设置位置和姿态输出精度为5位小数
     outfile.precision(5);
+    // 按TUM格式输出：时间戳 x y z qx qy qz qw
     outfile << p(0) << " " << p(1) << " " << p(2) << " " << q.x() << " "
             << q.y() << " " << q.z() << " " << q.w() << "\n";
   }
+  
+  // 关闭文件流
   outfile.close();
+  // 输出保存成功信息
   std::cout << "\n🍺 Save trajectory at " << traj_path << std::endl;
 
+  // 计算并显示轨迹性能统计信息
+  // 将起始到结束的旋转变换转换为轴角表示
   Eigen::AngleAxisd rotation_vector(start_end.unit_quaternion());
-  std::cout << "   Start-to-end deviation: " << std::setprecision(3) << start_end.translation().norm() << "m, " << rotation_vector.angle() * 180 / M_PI  << "°." << std::endl;
+  // 输出轨迹漂移统计：平移漂移（米）和旋转漂移（度）
+  std::cout << "   Start-to-end 轨迹漂移: " << std::setprecision(3) 
+            << start_end.translation().norm() << "m, " 
+            << rotation_vector.angle() * 180 / M_PI  << "°." << std::endl;
 }
 
 }  // namespace cocolic
