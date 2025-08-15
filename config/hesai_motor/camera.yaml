@@ -1,0 +1,22 @@
+%YAML:1.0
+
+image_topic: /left_camera/image  # suffix "compressed" omitted
+
+image_width: 1280 
+image_height: 1024 
+cam_fx: 1176.2874292149932
+cam_fy: 1176.21585445307
+cam_cx: 592.1187382755453
+cam_cy: 509.0864309628322
+cam_d0: -0.13218037625958456
+cam_d1: 0.15360732717073536
+cam_d2: 0.00036918417348059815
+cam_d3: -0.00031715324469463964
+cam_d4: 0.0
+
+CameraExtrinsics:  # camera to imu
+    time_offset: 0.000
+    Trans: [0.00260, 0.05057, -0.00587]
+    Rot: [ -0.00200, -0.99975, -0.02211,
+           -0.00366, 0.02212, -0.99975,
+           0.99999, -0.00192, -0.00371]

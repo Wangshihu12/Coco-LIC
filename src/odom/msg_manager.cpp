@@ -86,15 +86,22 @@ namespace cocolic
 
     bool use_livox = false;
     bool use_vlp = false;
+    bool use_hesai = false;
     for (int i = 0; i < num_lidars_; ++i)
     {
       std::string lidar_str = "lidar" + std::to_string(i);
       const auto &lidar_i = lidar_node[lidar_str];
       bool is_livox = lidar_i["is_livox"].as<bool>();
+      bool is_hesai = lidar_i["is_hesai"].as<bool>();
       if (is_livox)
       {
         lidar_types.push_back(LIVOX);
         use_livox = true;
+      }
+      else if (is_hesai)
+      {
+        lidar_types.push_back(HESAI);
+        use_hesai = true;
       }
       else
       {
@@ -127,6 +134,9 @@ namespace cocolic
       livox_feature_extraction_ =
           std::make_shared<LivoxFeatureExtraction>(lidar_node);
     if (use_vlp)
+      velodyne_feature_extraction_ =
+          std::make_shared<VelodyneFeatureExtraction>(lidar_node);
+    if (use_hesai)
       velodyne_feature_extraction_ =
           std::make_shared<VelodyneFeatureExtraction>(lidar_node);
 
@@ -174,6 +184,18 @@ namespace cocolic
             boost::bind(&MsgManager::LivoxCallback, this, _1, i));
         subs_livox_.push_back(sub);
       }
+      else if (lidar_types[i] == HESAI) {
+        // Hesai雷达订阅者
+        ros::Subscriber sub = nh.subscribe<sensor_msgs::PointCloud2>(
+            lidar_topics_[i], 10,
+            boost::bind(&MsgManager::HesaiCallback, this, _1, i));
+        ros::Subscriber sub_angle = nh.subscribe<motor::MultiMotor>(
+            "/multi_motor", 100000,
+            boost::bind(&MsgManager::MotorCallback, this, _1));
+        subs_hesai_.push_back(sub);
+        subs_angle_.push_back(sub_angle);
+        std::cout << "Hesai雷达订阅者初始化成功" << std::endl;
+      }
     }
 
     // 初始化图像订阅者（如果需要）
@@ -210,6 +232,47 @@ namespace cocolic
   {
     CheckLidarMsgTimestamp(msg->header.stamp.toSec(), msg->header.stamp.toSec());
     LivoxMsgHandle(msg, lidar_id);  // 调用现有处理函数
+  }
+
+  void MsgManager::MotorCallback(const motor::MultiMotor::ConstPtr &msg_in)
+  {
+    for (int i = 0; i < msg_in->motor_frames.size(); i++)
+    {
+      nav_msgs::Odometry::Ptr msg(new nav_msgs::Odometry());
+      msg->header = msg_in->motor_frames[i].header;
+      msg->twist.twist.angular.x = msg_in->motor_frames[i].angle_encoder;
+      double timestamp = msg->header.stamp.toSec();
+      // mtx_motor_buffer.lock();
+
+      if (timestamp < last_timestamp_motor)
+      {
+        ROS_WARN("motor loop back, clear buffer");
+
+        if (abs(last_timestamp_motor - timestamp) < 0.02)
+        {
+          last_timestamp_motor = motor_buffer.back()->header.stamp.toSec();
+          motor_buffer.pop_back(); // 移除尾部元素
+        }
+
+        // mtx_motor_buffer.unlock();
+        return;
+      }
+      last_timestamp_motor = timestamp;
+      motor_buffer.emplace_back(msg);
+      // mtx_motor_buffer.unlock();
+    }
+  }
+
+  void MsgManager::HesaiCallback(const sensor_msgs::PointCloud2::ConstPtr &msg, int lidar_id)
+  {
+    static int scan_num = 0;
+    scan_num++;
+    if (scan_num < 10)
+    {
+      return;
+    }
+    CheckLidarMsgTimestamp(msg->header.stamp.toSec(), msg->header.stamp.toSec());
+    HesaiMotorHandle(msg, motor_buffer, lidar_id);
   }
 
   /**
@@ -368,7 +431,7 @@ namespace cocolic
     {
       // 订阅者模式：处理ROS订阅者回调函数
       ros::spinOnce();  // 处理回调函数
-      usleep(1000);     // 短暂延时，避免CPU占用过高
+      usleep(10);     // 短暂延时，避免CPU占用过高
     }
   }
 
@@ -649,6 +712,8 @@ namespace cocolic
     for (auto it = lidar_buf_.begin(); it != lidar_buf_.end();)
     {
       // 如果当前激光雷达数据的时间戳大于等于目标时间，跳过
+      std::cout << "it->timestamp = " << it->timestamp << std::endl;
+      std::cout << "traj_max = " << traj_max << std::endl;
       if (it->timestamp >= traj_max)
       {
         ++it;
@@ -784,6 +849,62 @@ namespace cocolic
       // 针对LVI-SAM、LIO-SAM等数据集：雷达时间戳直接表示扫描开始时间
       // 直接转换时间戳为纳秒单位，无需额外校正
       lidar_buf_.back().timestamp = vlp16_msg->header.stamp.toSec() * S_TO_NS;
+    }
+    
+    // 存储已经过坐标变换的原始点云数据
+    lidar_buf_.back().raw_cloud = vlp_raw_cloud;
+    // 获取表面特征点云，用于平面约束优化（墙面、地面等平坦区域）
+    lidar_buf_.back().surf_cloud =
+        velodyne_feature_extraction_->GetSurfaceFeature();
+    // 获取角点特征点云，用于边缘约束优化（建筑物棱角、柱子等突出特征）
+    lidar_buf_.back().corner_cloud =
+        velodyne_feature_extraction_->GetCornerFeature();
+  }
+
+  void MsgManager::HesaiMotorHandle(
+    const sensor_msgs::PointCloud2::ConstPtr &msg,
+    const std::deque<nav_msgs::Odometry::ConstPtr> &angle_msgs,
+    int lidar_id)
+  {
+    if (angle_msgs.empty())
+    {
+      return;
+    }
+    while (motor_buffer.size() > 0 && motor_buffer.front()->header.stamp.toSec() < msg->header.stamp.toSec() - 0.5)
+    {
+      motor_buffer.pop_front();
+    }
+    // 创建原始点云数据容器，存储RTPoint类型点（包含x,y,z,intensity,ring,time信息）
+    RTPointCloud::Ptr vlp_raw_cloud(new RTPointCloud);
+    // 使用Velodyne特征提取器解析PointCloud2消息，转换为标准PCL点云格式
+    velodyne_feature_extraction_->ParseHesaiMotor(msg, angle_msgs, vlp_raw_cloud);
+
+    // 多雷达系统坐标变换：如果不是主雷达（ID≠0），先将点云变换到主雷达坐标系
+    // 注意：与Livox处理不同，这里在特征提取之前进行坐标变换
+    if (lidar_id != 0)
+      pcl::transformPointCloud(*vlp_raw_cloud, *vlp_raw_cloud,
+                              T_LktoL0_vec_[lidar_id]);
+
+    // 执行雷达数据处理和特征提取，包括去畸变、降采样、特征分类等操作
+    velodyne_feature_extraction_->LidarHandler(vlp_raw_cloud);
+
+    // 在雷达缓冲队列末尾创建新的数据条目，避免不必要的拷贝操作
+    lidar_buf_.emplace_back();
+    // 设置雷达ID，用于多雷达系统中的数据管理
+    lidar_buf_.back().lidar_id = lidar_id;
+    
+    // 根据数据集特性进行时间戳校正处理
+    if (lidar_timestamp_end_)
+    {
+      // 针对KAIST、VIRAL等数据集：雷达时间戳表示扫描结束时间，需要减去扫描时间（约0.1003秒）
+      // 将时间戳校正为扫描开始时间，确保与IMU等传感器的时间同步
+      lidar_buf_.back().timestamp = (msg->header.stamp.toSec() - 0.1003) * S_TO_NS;
+    }
+    else
+    {
+      // 针对LVI-SAM、LIO-SAM等数据集：雷达时间戳直接表示扫描开始时间
+      // 直接转换时间戳为纳秒单位，无需额外校正
+      lidar_buf_.back().timestamp = msg->header.stamp.toSec() * S_TO_NS;
     }
     
     // 存储已经过坐标变换的原始点云数据

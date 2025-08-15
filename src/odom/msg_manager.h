@@ -45,6 +45,8 @@
 #include <utils/parameter_struct.h>
 #include <utils/eigen_utils.hpp>
 
+#include "motor/MultiMotor.h"
+
 namespace cocolic
 {
 
@@ -58,6 +60,7 @@ namespace cocolic
   {
     VLP = 0,
     LIVOX,
+    HESAI,
   };
 
   struct NextMsgs
@@ -304,6 +307,11 @@ namespace cocolic
     void ImageMsgHandle(const sensor_msgs::ImageConstPtr &msg);
     void ImageMsgHandle(const sensor_msgs::CompressedImageConstPtr &msg);
 
+    void HesaiMotorHandle(
+      const sensor_msgs::PointCloud2::ConstPtr &msg,
+      const std::deque<nav_msgs::Odometry::ConstPtr> &angle_msgs,
+      int lidar_id);
+
   public:
     bool has_valid_msg_;
 
@@ -329,6 +337,9 @@ namespace cocolic
     std::vector<int64_t> lidar_max_timestamps_;
     int64_t image_max_timestamp_;
 
+    std::deque<nav_msgs::Odometry::ConstPtr> motor_buffer;
+    double last_timestamp_motor = -1.0;
+
     Eigen::aligned_deque<PoseData> pose_buf_;
     PoseData init_pose_;
 
@@ -344,6 +355,8 @@ namespace cocolic
     void LivoxCallback(const livox_ros_driver::CustomMsg::ConstPtr &msg, int lidar_id);  
     void ImageCallback(const sensor_msgs::ImageConstPtr &msg);
     void CompressedImageCallback(const sensor_msgs::CompressedImageConstPtr &msg);
+    void MotorCallback(const motor::MultiMotor::ConstPtr &msg_in);
+    void HesaiCallback(const sensor_msgs::PointCloud2::ConstPtr &msg, int lidar_id);
 
   private:
     // int64_t cur_imu_timestamp_;
@@ -374,6 +387,8 @@ namespace cocolic
     ros::Subscriber sub_imu_;
     std::vector<ros::Subscriber> subs_vlp16_;
     std::vector<ros::Subscriber> subs_livox_;
+    std::vector<ros::Subscriber> subs_hesai_;
+    std::vector<ros::Subscriber> subs_angle_;
     ros::Subscriber sub_image_;
 
     VelodyneFeatureExtraction::Ptr velodyne_feature_extraction_;

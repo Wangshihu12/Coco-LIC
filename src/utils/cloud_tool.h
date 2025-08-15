@@ -23,6 +23,7 @@
 #include <pcl/kdtree/kdtree_flann.h>
 #include <boost/sort/spreadsort/spreadsort.hpp>
 #include <iostream>
+#include <nav_msgs/Odometry.h>
 
 #include <utils/mypcl_cloud_type.h>
 
@@ -50,7 +51,7 @@ inline float GetCloudMaxTime(const RTPointCloud::Ptr cloud) {
 }
 
 inline int64_t GetCloudMaxTimeNs(const RTPointCloud::Ptr cloud) {
-  assert(cloud->size() > 0 && "[GetCloudMaxTime] input empty cloud.");
+  assert(cloud->size() > 0 && "[GetCloudMaxTimeNs] input empty cloud.");
   int64_t t_max = cloud->back().time;
   for (size_t i = cloud->size() - 1; i > 0; i--) {
     int64_t t_point = cloud->points[i].time;
@@ -158,6 +159,141 @@ inline void RTPointCloudTmp2RTPointCloudHesai(
     dst.intensity = src.intensity;
     dst.ring = src.ring;
     dst.time = int64_t((src.timestamp - first_timestamp) * 1e9);  // float src.time = 0.0995 
+
+    if (PointNorm(dst) < 0.1 || dst.time > 0.11 * 1e9) {
+      dst = zero_point;
+      dst.ring = src.ring;
+    }
+  }
+}
+
+static int quick_power(int a, int b, int mod)
+{
+  int res = 1;
+  while (b)
+  {
+    if (b & 1)
+    {
+      res = (long long)res * a % mod;
+    }
+    a = (long long)a * a % mod;
+    b >>= 1;
+  }
+  return res;
+}
+
+static int int_encrypt(int m, int e, int n) { return quick_power(m, e, n); }
+
+static int int_dencypt(int c, int d, int n) { return quick_power(c, d, n); }
+
+static double deg2rad(double deg) { return deg * M_PI / 180.0; }
+static void rotatePoint(RTPoint &point, const Eigen::Affine3d &transform)
+{
+  Eigen::Vector3d point_position(point.x, point.y, point.z + 0.0148);
+  Eigen::Vector3d rotated_position = transform * point_position;
+  point.x = rotated_position.x() + 0.1202;
+  point.y = rotated_position.y();
+  point.z = rotated_position.z() + 0.00927;
+}
+
+static void undistortPointByMotor(RTPoint &point, const MotorData &motor_data)
+{
+  // 初始化绕Z轴的120度旋转
+  Eigen::Affine3d rotation_z = Eigen::Affine3d::Identity();
+  rotation_z.rotate(Eigen::AngleAxisd(120.0 * M_PI / 180.0, Eigen::Vector3d::UnitZ()));
+
+  // 计算电机绕X轴的旋转角度
+  double rotation_angle = deg2rad(motor_data.angle);
+  Eigen::Affine3d rotation_x = Eigen::Affine3d::Identity();
+  rotation_x.rotate(Eigen::AngleAxisd(rotation_angle, Eigen::Vector3d::UnitX()));
+
+  // 初始化绕Y轴的-15度旋转
+  Eigen::Affine3d rotation_y = Eigen::Affine3d::Identity();
+  rotation_y.rotate(Eigen::AngleAxisd(-15.0 * M_PI / 180.0, Eigen::Vector3d::UnitY()));
+
+  // 组合旋转矩阵（应用顺序：Z → X → Y）
+  Eigen::Affine3d combined_transform = rotation_y * rotation_x * rotation_z;
+
+
+
+  rotatePoint(point, combined_transform);
+
+}
+
+inline void xt32_motor_handler(
+  const RTPointCloudTmpHesai ::Ptr& input_cloud,
+  const std::deque<nav_msgs::Odometry::ConstPtr> &angle_msgs,
+  RTPointCloud::Ptr& output_cloud
+)
+{
+  output_cloud->header = input_cloud->header;
+  output_cloud->height = input_cloud->height;
+  output_cloud->width = input_cloud->width;
+  output_cloud->resize(input_cloud->height * input_cloud->width);
+  output_cloud->is_dense = input_cloud->is_dense;
+
+  RTPoint zero_point;
+  zero_point.x = 0;
+  zero_point.y = 0;
+  zero_point.intensity = 0;
+  zero_point.time = -1;
+
+  double first_timestamp = input_cloud->points[0].timestamp;
+  for (size_t i = 0; i < input_cloud->size(); i++) {
+    auto& src = input_cloud->points[i];
+    auto& dst = output_cloud->points[i];
+    dst.x = src.x;
+    dst.y = src.y;
+    dst.z = src.z;
+    dst.intensity = src.intensity;
+    dst.ring = src.ring;
+    dst.time = int64_t((src.timestamp - first_timestamp) * 1e9);  // float src.time = 0.0995 
+
+#pragma region 电机矫正点云
+    {
+      double point_timestamp = src.timestamp;
+
+      auto angle_msg_iter = std::lower_bound(angle_msgs.begin(), angle_msgs.end(), point_timestamp,
+                                             [](const nav_msgs::Odometry::ConstPtr &angle_msg, double timestamp)
+                                             {
+                                               return angle_msg->header.stamp.toSec() < timestamp;
+                                             });
+
+      // cout << "point_timestamp:" << point_timestamp << endl;
+      // cout << "angle_msg_iter:" << angle_msg_iter->header.stamp.toSec() << endl;
+
+      nav_msgs::Odometry::ConstPtr angle1 = nullptr;
+      if (angle_msg_iter == angle_msgs.end())
+      {
+        // No angle_msg has a timestamp greater than the point timestamp
+        // So, we'll use the last angle message
+        if (angle_msgs.size() > 1)
+          angle1 = *(angle_msg_iter - 1);
+      }
+      else
+      {
+        // We're between two angle messages
+        angle1 = *(angle_msg_iter - 1);
+      }
+
+      // cout << "point_timestamp:" << point_timestamp << endl;
+      // cout << "angle1:" << angle1->header.stamp.toSec() << endl;
+
+      if (angle1)
+      {
+
+        // 解密电机角度低精度电机
+        double angle_1 = int_dencypt((int)angle1->twist.twist.angular.x, 447703, 4582607) * (360.0 / 65536.0);
+
+        MotorData interpolated_motor_data;
+
+        interpolated_motor_data.angle = angle_1;
+
+        undistortPointByMotor(dst, interpolated_motor_data);
+
+      }
+    }
+#pragma endregion
 
     if (PointNorm(dst) < 0.1 || dst.time > 0.11 * 1e9) {
       dst = zero_point;

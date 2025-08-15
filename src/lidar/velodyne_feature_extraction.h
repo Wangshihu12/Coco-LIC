@@ -63,6 +63,11 @@ namespace cocolic
     // 
     bool ParsePointCloud(const sensor_msgs::PointCloud2::ConstPtr &lidar_msg,
                          RTPointCloud::Ptr out_cloud) const;
+    bool ParseHesaiMotor(
+      const sensor_msgs::PointCloud2::ConstPtr &lidar_msg,
+      const std::deque<nav_msgs::Odometry::ConstPtr> &angle_msgs,
+      RTPointCloud::Ptr out_cloud) const;
+
     bool ParsePointCloudNoFeature(
         const sensor_msgs::PointCloud2::ConstPtr &lidar_msg,
         RTPointCloud::Ptr out_cloud);

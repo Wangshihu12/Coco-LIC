@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="project_path"       default = "" />
+  <arg name="config_path"       default = "/config/hesai_motor.yaml" />
+  <!-- <arg name="config_path"       default = "/config/ct_odometry_fastlivo.yaml" /> -->
+  <!-- <arg name="config_path"       default = "/config/ct_odometry_viral.yaml" /> -->
+  <!-- <arg name="config_path"       default = "/config/ct_odometry_lvisam.yaml" /> -->
+  <arg name="bag_path"          default = "/home/goslam/Documents/数据集/fast-livo2/CBD_Building_02.bag" />  
+  <arg name="pasue_time"        default = "-1" />
+  <arg name="verbose"           default = "false" />  
+  
+  <node pkg="cocolic" type="odometry_node" name="$(anon odometry_node)" output="screen">
+    <param name="project_path"     type="string" value="$(find cocolic)" />
+    <param name="config_path"     type="string" value="$(find cocolic)$(arg config_path)" />
+    <param name="bag_path"        type="string" value="$(arg bag_path)" />
+    <param name="pasue_time"      type="double" value="$(arg pasue_time)" />
+    <param name="verbose"         type="bool"   value="$(arg verbose)" />
+  </node>
+
+  <node pkg="rviz" type="rviz" name="rviz_odom" output="log" required = "true" args="-d $(find cocolic)/config/coco.rviz" />
+</launch>
